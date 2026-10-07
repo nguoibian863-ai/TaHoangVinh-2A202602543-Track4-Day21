@@ -90,6 +90,42 @@ class TestProjection(unittest.TestCase):
         # Perturbed should differ
         self.assertFalse(np.allclose(self.calib.Tr_velo_to_cam, calib_copy.Tr_velo_to_cam))
 
+    def test_1d_array_and_list_inputs(self):
+        """Verify 1D array and Python list inputs do not crash with IndexError."""
+        # Single 1D array
+        pt_1d = np.array([10.0, 0.0, 0.0], dtype=np.float32)
+        cam_1d = velo_to_cam(pt_1d, self.calib)
+        self.assertEqual(cam_1d.shape, (3,))
+        self.assertAlmostEqual(float(cam_1d[2]), 9.727, places=2)
+
+        # Single Python list
+        pt_list = [10.0, 0.0, 0.0]
+        cam_list = velo_to_cam(pt_list, self.calib)
+        self.assertEqual(cam_list.shape, (3,))
+        self.assertAlmostEqual(float(cam_list[2]), 9.727, places=2)
+
+        # 1D input to cam_to_image
+        uv, depth, mask = cam_to_image(cam_1d, self.calib.P2, self.img_shape)
+        self.assertEqual(len(uv), 1)
+        self.assertEqual(len(depth), 1)
+        self.assertEqual(len(mask), 1)
+        self.assertTrue(mask[0])
+
+    def test_4_channel_inputs(self):
+        """Verify points with 4 channels (x, y, z, reflectance) are supported."""
+        pts_4ch = np.array([[10.0, 0.0, 0.0, 0.75], [12.0, 1.0, -0.5, 0.20]], dtype=np.float32)
+        cam = velo_to_cam(pts_4ch, self.calib)
+        self.assertEqual(cam.shape, (2, 3))
+        self.assertAlmostEqual(float(cam[0, 2]), 9.727, places=2)
+
+    def test_strictly_positive_depth_filtering(self):
+        """Verify points with z_cam <= min_depth or negative projective scale s <= 0 are rejected."""
+        pts_neg = np.array([[0.0, 0.0, -5.0], [0.0, 0.0, 0.05]], dtype=np.float32)
+        uv, depth, mask = cam_to_image(pts_neg, self.calib.P2, self.img_shape, min_depth=0.1)
+        self.assertEqual(len(uv), 0)
+        self.assertEqual(len(depth), 0)
+        self.assertFalse(np.any(mask))
+
 
 if __name__ == "__main__":
     unittest.main()

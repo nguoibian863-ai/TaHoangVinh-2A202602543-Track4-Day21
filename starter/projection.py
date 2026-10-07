@@ -32,15 +32,19 @@ def velo_to_cam(points_xyz: np.ndarray, calib: KittiCalib) -> np.ndarray:
       3. Trả về 3 cột đầu.
     Tự kiểm: một điểm velodyne (10, 0, 0) phải có z_cam ~ 10 (phía trước camera).
     """
-    if len(points_xyz) == 0:
+    pts = np.asarray(points_xyz, dtype=np.float32)
+    if pts.size == 0:
         return np.zeros((0, 3), dtype=np.float32)
-    N = len(points_xyz)
+    is_1d = (pts.ndim == 1)
+    if is_1d:
+        pts = pts.reshape(1, -1)
+    N = len(pts)
     pts_cam = np.full((N, 3), np.nan, dtype=np.float32)
-    finite = np.isfinite(points_xyz[:, :3]).all(axis=1)
+    finite = np.isfinite(pts[:, :3]).all(axis=1)
     if np.any(finite):
-        pts_homo = np.pad(points_xyz[finite, :3], ((0, 0), (0, 1)), mode="constant", constant_values=1.0)
+        pts_homo = np.pad(pts[finite, :3], ((0, 0), (0, 1)), mode="constant", constant_values=1.0)
         pts_cam[finite] = (pts_homo @ calib.T_cam_velo.T)[:, :3]
-    return pts_cam
+    return pts_cam[0] if is_1d else pts_cam
 
 
 def cam_to_image(points_cam: np.ndarray, P2: np.ndarray, image_shape: tuple[int, ...],
@@ -60,30 +64,34 @@ def cam_to_image(points_cam: np.ndarray, P2: np.ndarray, image_shape: tuple[int,
       3. Chia cho s để có (u, v). Chỉ chia với điểm có depth > min_depth.
       4. Lọc theo kích thước ảnh image_shape[:2] = (H, W).
     """
-    N = len(points_cam)
-    if N == 0:
+    pts = np.asarray(points_cam, dtype=np.float32)
+    if pts.size == 0:
         return np.zeros((0, 2), dtype=np.float32), np.zeros((0,), dtype=np.float32), np.zeros((0,), dtype=bool)
 
-    finite_mask = np.isfinite(points_cam).all(axis=1)
+    if pts.ndim == 1:
+        pts = pts.reshape(1, -1)
+
+    N = len(pts)
+    finite_mask = np.isfinite(pts[:, :3]).all(axis=1)
     mask = np.zeros(N, dtype=bool)
-    z_cam = points_cam[:, 2]
+    z_cam = pts[:, 2]
     valid_depth_mask = finite_mask & (z_cam > min_depth)
 
     if not np.any(valid_depth_mask):
         return np.zeros((0, 2), dtype=np.float32), np.zeros((0,), dtype=np.float32), mask
 
     valid_indices = np.where(valid_depth_mask)[0]
-    valid_pts = points_cam[valid_indices]
+    valid_pts = pts[valid_indices, :3]
     pts_homo = np.pad(valid_pts, ((0, 0), (0, 1)), mode="constant", constant_values=1.0)
     proj = pts_homo @ P2.T
 
     s = proj[:, 2]
-    s_safe = np.where(s == 0, 1e-6, s)
+    s_safe = np.where(np.abs(s) < 1e-6, 1e-6, s)
     u = proj[:, 0] / s_safe
     v = proj[:, 1] / s_safe
 
     H, W = image_shape[:2]
-    in_bounds = (u >= 0) & (u < W) & (v >= 0) & (v < H)
+    in_bounds = (s > min_depth) & (u >= 0) & (u < W) & (v >= 0) & (v < H)
 
     final_indices = valid_indices[in_bounds]
     mask[final_indices] = True

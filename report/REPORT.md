@@ -37,23 +37,33 @@ Thí nghiệm quét góc xoay $\text{yaw} \in [-3.0^\circ, +3.0^\circ]$ trên 5 
 | $+3.0^\circ$ | 43.4% | 0.226 | 46.99 px | 44.88 px | 41.92 px | 45.99 px | 16.47% |
 
 ![drift_benchmark](../results/figures/projection_drift_analysis.png)
-*Hình 1: Phân tích định lượng độ nhạy calibration với góc yaw drift: (Trái) Tỷ lệ lưu giữ điểm trong box và IoU; (Giữa) Độ dịch chuyển pixel phân tầng theo khoảng cách; (Phải) Tỷ lệ điểm LiDAR trong FOV camera.*
+*Hình 1: Phân tích định lượng độ nhạy calibration với góc yaw drift (4 biểu đồ): (1) Tỷ lệ lưu giữ điểm PBR và IoU của 2 thuật toán; (2) Tỷ lệ retention phân tầng theo khoảng cách (Gần, Trung bình, Xa); (3) Độ dịch chuyển pixel theo khoảng cách; (4) Tỷ lệ điểm LiDAR trong FOV camera.*
+
+**Phân tích độ nhạy theo khoảng cách (Trả lời câu hỏi phản biện: Phát hiện drift ở khoảng cách nào?):**
+Khi extrinsic yaw lệch $1.0^\circ$ ($\sim 15.5\text{ px}$):
+- **Cự ly gần (<15m):** 2D bbox rộng ($>150\text{ px}$), nên $82.9\%$ điểm vẫn nằm lọt trong box, hệ thống khó nhận biết nếu chỉ nhìn vật sát xe.
+- **Cự ly trung bình (15–30m):** Retention giảm xuống $73.7\%$.
+- **Cự ly xa (>30m):** 2D bbox của người đi bộ chỉ rộng $15-25\text{ px}$ và xe chỉ rộng $40-60\text{ px}$, nên độ lệch $15.5\text{ px}$ hất văng phần lớn điểm ra ngoài, Retention sụp đổ xuống $55.6\%$ (và riêng frame `000011` giảm còn $7.5\%$). Khi lệch $\ge 1.5^\circ$, retention ở cự ly xa tụt về gần $0\%$.
+=> **Kết luận:** Hệ thống tự động phát hiện drift sớm nhất và rõ ràng nhất ở **cự ly xa (>30m)** vì kích thước góc của vật thể nhỏ, dễ bị vỡ liên kết không gian nhất!
 
 ![demo_nominal](../results/figures/demo_nominal_000001_yaw_+0.0deg.png)
 *Hình 2: Demo hình ảnh chiếu LiDAR lên camera ở trạng thái chuẩn trực hoàn hảo ($0.0^\circ$) trên KITTI frame 000001. Điểm màu bám sát thân xe và người đi xe đạp.*
 
 ---
 
-### 2.2 Bonus B1 — So sánh hai phương pháp đánh giá sai lệch calibration
-So sánh giữa **Thuật toán 1: Point-in-Box Retention (PBR)** và **Thuật toán 2: Projected Bounding Box IoU (PBIoU)** trên cùng tập dữ liệu KITTI:
+### 2.2 Bonus B1 — So sánh hai thuật toán trên cùng dữ liệu, cùng metric
+So sánh trực tiếp giữa **Thuật toán A: Chiếu 8 đỉnh hộp 3D (3D Box Corners Envelope)** và **Thuật toán B: Chiếu cụm điểm LiDAR (LiDAR Points Min-Max Hull)** trên cùng tập dữ liệu KITTI, **cùng metric là 2D Bounding Box IoU với Ground Truth**:
 
-| Tiêu chí | Thuật toán 1: Point-in-Box Retention (PBR) | Thuật toán 2: Projected Box IoU (PBIoU) |
-|---|---|---|
-| **Định nghĩa** | Tỷ lệ điểm LiDAR thuộc 3D GT box vẫn rơi bên trong 2D bbox sau khi chiếu | IoU giữa hình chữ nhật bao quanh điểm chiếu và 2D bbox camera |
-| **Độ nhạy khi lệch $0.5^\circ$** | Giảm $8.6\%$ (từ $99.6\%$ xuống $91.0\%$) | Giảm $15.8\%$ (từ $0.620$ xuống $0.522$) |
-| **Độ nhạy khi lệch $1.0^\circ$** | Giảm $25.5\%$ (xuống $74.1\%$) | Giảm $30.5\%$ (xuống $0.431$) |
-| **Ưu điểm** | Cực kỳ bền vững với cụm điểm thưa (vật thể xa hoặc người đi bộ chỉ có 10–20 điểm) | Phản ánh chính xác hướng lệch không gian và nhạy sớm với góc lệch nhỏ |
-| **Nhược điểm** | Khi box 2D quá lớn, điểm bị lệch nhẹ vẫn có thể nằm bên trong box | Cụm điểm quá thưa ở nuScenes làm IoU nền ban đầu bị thấp |
+| Mức lệch Yaw | Thuật toán A: 3D Box Corners IoU | Thuật toán B: LiDAR Points Hull IoU | Nhận xét so sánh trên cùng metric IoU |
+|---|---|---|---|
+| **$0.0^\circ$ (Chuẩn)** | **0.921** | **0.620** | Thuật toán A bao trọn thể tích 3D nên IoU cao hơn; Thuật toán B chỉ bao bề mặt phản xạ |
+| $+0.5^\circ$ | 0.921 | 0.522 (−15.8%) | Thuật toán A độc lập với extrinsic LiDAR; Thuật toán B nhạy ngay khi LiDAR trôi nhẹ |
+| $+1.0^\circ$ | 0.921 | 0.431 (−30.5%) | Thuật toán B mất gần 1/3 diện tích giao do điểm bị dịch 15.5 px |
+| $+2.0^\circ$ | 0.921 | 0.313 (−49.5%) | Thuật toán B suy giảm nghiêm trọng, điểm rơi lệch nửa thân xe |
+| $+3.0^\circ$ | 0.921 | 0.226 (−63.5%) | Thuật toán B trôi gần như hoàn toàn ra ngoài bounding box thực tế |
+
+- **Thuật toán A (3D Box Corners Projection):** Dùng ma trận $P_2$ chiếu 8 đỉnh hộp 3D camera ra bao ngoài 2D. Ưu điểm: Đạt IoU cao ($0.921$), bao phủ toàn bộ diện tích xe, không phụ thuộc vào độ thưa của chùm tia LiDAR. Nhược điểm: Cần nhãn 3D hoàn chỉnh hoặc model 3D detector tốt; không phản ánh trực tiếp sự mất chuẩn trực giữa LiDAR và Camera nếu box nằm trong camera frame.
+- **Thuật toán B (Projected LiDAR Point Hull):** Dùng các điểm LiDAR thực tế phản xạ nằm trong hộp chiếu lên ảnh. Ưu điểm: Phản ánh trung thực dữ liệu cảm biến đo thật, đóng vai trò sensor calibration QA cực kỳ nhạy với độ lệch góc (IoU giảm từ $0.620 \to 0.226$). Nhược điểm: Bị giới hạn bởi mật độ chùm tia, vật thể xa có ít điểm làm IoU nền ban đầu thấp hơn.
 
 ---
 

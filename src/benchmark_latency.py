@@ -137,7 +137,11 @@ def plot_latency(stages: Dict[str, List[float]], out_path: Path) -> None:
     ax1 = axes[0]
     stage_names = ["velo_to_cam", "cam_to_image", "projection_total", "overlay_rendering"]
     data = [stages[k] for k in stage_names]
-    bplot = ax1.boxplot(data, tick_labels=["velo->cam", "cam->img", "Total Proj", "Overlay"], patch_artist=True)
+    stage_labels = ["velo->cam", "cam->img", "Total Proj", "Overlay"]
+    try:
+        bplot = ax1.boxplot(data, tick_labels=stage_labels, patch_artist=True)
+    except TypeError:
+        bplot = ax1.boxplot(data, labels=stage_labels, patch_artist=True)
     colors = ["#4C72B0", "#55A868", "#C44E52", "#8172B2"]
     for patch, c in zip(bplot["boxes"], colors):
         patch.set_facecolor(c)

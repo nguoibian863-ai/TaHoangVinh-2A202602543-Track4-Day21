@@ -26,6 +26,7 @@ if str(ROOT) not in sys.path:
 from starter.datasets import dataset_type, list_frames, load_frame
 from starter.kitti_io import KittiCalib, KittiObject
 from starter.projection import (
+    box3d_corners_cam,
     cam_to_image,
     draw_box2d,
     overlay_points,
@@ -120,7 +121,11 @@ def evaluate_frame_projection(
 
     # 3. Object-level metrics: Point-in-Box Retention (PBR) & Box IoU
     obj_pbr_list: List[float] = []
+    obj_pbr_near_list: List[float] = []
+    obj_pbr_mid_list: List[float] = []
+    obj_pbr_far_list: List[float] = []
     obj_iou_list: List[float] = []
+    obj_iou_corners_list: List[float] = []
 
     for obj in frame["labels"]:
         in_3d = get_points_in_object_3d(pts_cam_orig, obj)
@@ -130,9 +135,24 @@ def evaluate_frame_projection(
         pts_obj_cam_pert = pts_cam_pert[in_3d]
         uv_obj, _, _ = cam_to_image(pts_obj_cam_pert, calib_perturbed.P2, img_shape)
 
+        # Algorithm A: 3D Box 8-corner projection envelope
+        corners = box3d_corners_cam(obj)
+        uv_c, _, m_c = cam_to_image(corners, calib_perturbed.P2, img_shape)
+        if m_c.sum() >= 4:
+            b_c = np.array([uv_c[:, 0].min(), uv_c[:, 1].min(), uv_c[:, 0].max(), uv_c[:, 1].max()])
+            obj_iou_corners_list.append(compute_box_iou(b_c, obj.bbox))
+
+        d = float(obj.location[2])
+
         if len(uv_obj) == 0:
             obj_pbr_list.append(0.0)
             obj_iou_list.append(0.0)
+            if d < 15.0:
+                obj_pbr_near_list.append(0.0)
+            elif d < 30.0:
+                obj_pbr_mid_list.append(0.0)
+            else:
+                obj_pbr_far_list.append(0.0)
             continue
 
         x1, y1, x2, y2 = obj.bbox
@@ -142,8 +162,16 @@ def evaluate_frame_projection(
             & (uv_obj[:, 1] >= y1)
             & (uv_obj[:, 1] <= y2)
         )
-        obj_pbr_list.append(float(in_2d.mean()))
+        pbr_val = float(in_2d.mean())
+        obj_pbr_list.append(pbr_val)
+        if d < 15.0:
+            obj_pbr_near_list.append(pbr_val)
+        elif d < 30.0:
+            obj_pbr_mid_list.append(pbr_val)
+        else:
+            obj_pbr_far_list.append(pbr_val)
 
+        # Algorithm B: Projected LiDAR points hull
         proj_bbox = np.array([
             uv_obj[:, 0].min(),
             uv_obj[:, 1].min(),
@@ -153,7 +181,11 @@ def evaluate_frame_projection(
         obj_iou_list.append(compute_box_iou(proj_bbox, obj.bbox))
 
     mean_pbr = float(np.mean(obj_pbr_list)) if obj_pbr_list else 1.0
+    mean_pbr_near = float(np.mean(obj_pbr_near_list)) if obj_pbr_near_list else mean_pbr
+    mean_pbr_mid = float(np.mean(obj_pbr_mid_list)) if obj_pbr_mid_list else mean_pbr
+    mean_pbr_far = float(np.mean(obj_pbr_far_list)) if obj_pbr_far_list else mean_pbr
     mean_iou = float(np.mean(obj_iou_list)) if obj_iou_list else 1.0
+    mean_iou_corners = float(np.mean(obj_iou_corners_list)) if obj_iou_corners_list else 1.0
 
     return {
         "fov_ratio": fov_ratio,
@@ -162,7 +194,11 @@ def evaluate_frame_projection(
         "mean_shift_far_px": mean_shift_far,
         "mean_shift_overall_px": mean_shift_overall,
         "point_in_box_retention": mean_pbr,
+        "retention_near": mean_pbr_near,
+        "retention_mid": mean_pbr_mid,
+        "retention_far": mean_pbr_far,
         "projected_box_iou": mean_iou,
+        "projected_box3d_corners_iou": mean_iou_corners,
         "evaluated_objects": len(obj_pbr_list),
     }
 
@@ -202,14 +238,22 @@ def run_perturbation_sweep(
             m = evaluate_frame_projection(fr, calib_pert)
             frame_metrics.append(m)
 
-        # Aggregate across frames
+        # Aggregate across frames with objects
+        valid_frames = [m for m in frame_metrics if m["evaluated_objects"] > 0]
+        if not valid_frames:
+            valid_frames = frame_metrics
+
         avg_fov = np.mean([m["fov_ratio"] for m in frame_metrics])
         avg_shift_near = np.mean([m["mean_shift_near_px"] for m in frame_metrics])
         avg_shift_mid = np.mean([m["mean_shift_mid_px"] for m in frame_metrics])
         avg_shift_far = np.mean([m["mean_shift_far_px"] for m in frame_metrics])
         avg_shift_overall = np.mean([m["mean_shift_overall_px"] for m in frame_metrics])
-        avg_pbr = np.mean([m["point_in_box_retention"] for m in frame_metrics])
-        avg_iou = np.mean([m["projected_box_iou"] for m in frame_metrics])
+        avg_pbr = np.mean([m["point_in_box_retention"] for m in valid_frames])
+        avg_pbr_near = np.mean([m["retention_near"] for m in valid_frames])
+        avg_pbr_mid = np.mean([m["retention_mid"] for m in valid_frames])
+        avg_pbr_far = np.mean([m["retention_far"] for m in valid_frames])
+        avg_iou = np.mean([m["projected_box_iou"] for m in valid_frames])
+        avg_iou_corners = np.mean([m["projected_box3d_corners_iou"] for m in valid_frames])
         total_eval_objs = sum(int(m["evaluated_objects"]) for m in frame_metrics)
 
         results.append({
@@ -221,7 +265,11 @@ def run_perturbation_sweep(
             "mean_shift_far_px": avg_shift_far,
             "mean_shift_overall_px": avg_shift_overall,
             "point_in_box_retention": avg_pbr,
+            "retention_near": avg_pbr_near,
+            "retention_mid": avg_pbr_mid,
+            "retention_far": avg_pbr_far,
             "projected_box_iou": avg_iou,
+            "projected_box3d_corners_iou": avg_iou_corners,
             "evaluated_objects": total_eval_objs,
         })
 
@@ -246,61 +294,81 @@ def plot_drift_benchmark(
     out_path: Path,
     title_suffix: str = "",
 ) -> None:
-    """Generate professional 3-panel figure showing calibration drift sensitivity."""
+    """Generate professional 4-panel figure showing calibration drift sensitivity."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     x = [r["perturb_value"] for r in records]
     param_name = records[0]["param"]
     unit = "deg" if "deg" in param_name else "m"
 
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4.5), dpi=300)
+    fig, axes = plt.subplots(1, 4, figsize=(21, 4.8), dpi=300)
 
-    # Subplot 1: Point-in-Box Retention & Box IoU
+    # Subplot 1: Point-in-Box Retention & Box IoU (Bonus B1: Alg A vs Alg B)
     pbr = [r["point_in_box_retention"] * 100 for r in records]
-    iou = [r["projected_box_iou"] for r in records]
+    iou_pts = [r["projected_box_iou"] for r in records]
+    iou_corners = [r.get("projected_box3d_corners_iou", 0.0) for r in records]
 
     ax1 = axes[0]
-    l1 = ax1.plot(x, pbr, "b-o", linewidth=2.2, label="Point-in-Box Retention (%)")
+    l1 = ax1.plot(x, pbr, "b-o", linewidth=2.2, label="Point Retention (PBR %)")
     ax1.set_xlabel(f"Perturbation {param_name} ({unit})", fontsize=11, fontweight="bold")
     ax1.set_ylabel("Point Retention (%)", color="b", fontsize=11, fontweight="bold")
     ax1.tick_params(axis="y", labelcolor="b")
     ax1.grid(True, linestyle="--", alpha=0.5)
 
     ax1_twin = ax1.twinx()
-    l2 = ax1_twin.plot(x, iou, "r--s", linewidth=2.0, label="Projected Box IoU")
+    l2 = ax1_twin.plot(x, iou_pts, "r--s", linewidth=2.0, label="Alg B: LiDAR Point Hull IoU")
+    l3 = ax1_twin.plot(x, iou_corners, "c-.^", linewidth=2.0, label="Alg A: 3D Box Corners IoU")
     ax1_twin.set_ylabel("Bounding Box IoU", color="r", fontsize=11, fontweight="bold")
     ax1_twin.tick_params(axis="y", labelcolor="r")
 
-    # Joint legend
-    lines = l1 + l2
+    lines = l1 + l2 + l3
     labels = [l.get_label() for l in lines]
-    ax1.legend(lines, labels, loc="lower center", framealpha=0.9)
-    ax1.set_title("Projection Alignment Sensitivity", fontsize=12, fontweight="bold")
+    ax1.legend(lines, labels, loc="lower center", fontsize=9, framealpha=0.9)
+    ax1.set_title("Projection Sensitivity (B1)", fontsize=12, fontweight="bold")
 
-    # Subplot 2: Distance-stratified Pixel Displacement
+    # Subplot 2: Distance-stratified Point Retention
     ax2 = axes[1]
+    p_near = [r.get("retention_near", r["point_in_box_retention"]) * 100 for r in records]
+    p_mid = [r.get("retention_mid", r["point_in_box_retention"]) * 100 for r in records]
+    p_far = [r.get("retention_far", r["point_in_box_retention"]) * 100 for r in records]
+
+    ax2.plot(x, p_near, "g-^", linewidth=2.0, label="Near (<15 m)")
+    ax2.plot(x, p_mid, "y-d", linewidth=2.0, label="Mid (15-30 m)")
+    ax2.plot(x, p_far, "m-x", linewidth=2.0, label="Far (>30 m)")
+    ax2.axhline(y=85.0, color="red", linestyle=":", label="Drift Limit (85%)")
+    ax2.set_xlabel(f"Perturbation {param_name} ({unit})", fontsize=11, fontweight="bold")
+    ax2.set_ylabel("Retention by Distance (%)", fontsize=11, fontweight="bold")
+    ax2.set_title("Retention by Distance Bucket", fontsize=12, fontweight="bold")
+    ax2.grid(True, linestyle="--", alpha=0.5)
+    ax2.legend(loc="lower center", fontsize=9, framealpha=0.9)
+
+    # Subplot 3: Distance-stratified Pixel Displacement
+    ax3 = axes[2]
     s_near = [r["mean_shift_near_px"] for r in records]
     s_mid = [r["mean_shift_mid_px"] for r in records]
     s_far = [r["mean_shift_far_px"] for r in records]
 
-    ax2.plot(x, s_near, "g-^", linewidth=2.0, label="Near (<15 m)")
-    ax2.plot(x, s_mid, "y-d", linewidth=2.0, label="Mid (15-30 m)")
-    ax2.plot(x, s_far, "m-x", linewidth=2.0, label="Far (>30 m)")
-    ax2.set_xlabel(f"Perturbation {param_name} ({unit})", fontsize=11, fontweight="bold")
-    ax2.set_ylabel("Mean Pixel Shift (px)", fontsize=11, fontweight="bold")
-    ax2.set_title("Pixel Displacement by Distance Bucket", fontsize=12, fontweight="bold")
-    ax2.grid(True, linestyle="--", alpha=0.5)
-    ax2.legend(loc="upper center", framealpha=0.9)
-
-    # Subplot 3: FOV Retention & Drift Threshold
-    ax3 = axes[2]
-    fov = [r["fov_ratio"] * 100 for r in records]
-    ax3.plot(x, fov, "k-o", linewidth=2.0, label="% LiDAR Points in Image")
-    ax3.axhline(y=fov[x.index(0.0)], color="gray", linestyle=":", label="Nominal FOV")
+    ax3.plot(x, s_near, "g-^", linewidth=2.0, label="Near (<15 m)")
+    ax3.plot(x, s_mid, "y-d", linewidth=2.0, label="Mid (15-30 m)")
+    ax3.plot(x, s_far, "m-x", linewidth=2.0, label="Far (>30 m)")
     ax3.set_xlabel(f"Perturbation {param_name} ({unit})", fontsize=11, fontweight="bold")
-    ax3.set_ylabel("Points inside Image FOV (%)", fontsize=11, fontweight="bold")
-    ax3.set_title("Overall FOV Point Retention", fontsize=12, fontweight="bold")
+    ax3.set_ylabel("Mean Pixel Shift (px)", fontsize=11, fontweight="bold")
+    ax3.set_title("Pixel Displacement by Distance", fontsize=12, fontweight="bold")
     ax3.grid(True, linestyle="--", alpha=0.5)
-    ax3.legend(loc="lower center", framealpha=0.9)
+    ax3.legend(loc="upper center", fontsize=9, framealpha=0.9)
+
+    # Subplot 4: FOV Retention & Drift Threshold
+    ax4 = axes[3]
+    fov = [r["fov_ratio"] * 100 for r in records]
+    ax4.plot(x, fov, "k-o", linewidth=2.0, label="% Points in Image")
+    if 0.0 in x:
+        ax4.axhline(y=fov[x.index(0.0)], color="gray", linestyle=":", label="Nominal FOV")
+    else:
+        ax4.axhline(y=fov[0], color="gray", linestyle=":", label="Baseline FOV")
+    ax4.set_xlabel(f"Perturbation {param_name} ({unit})", fontsize=11, fontweight="bold")
+    ax4.set_ylabel("LiDAR Points in FOV (%)", fontsize=11, fontweight="bold")
+    ax4.set_title("Overall FOV Point Retention", fontsize=12, fontweight="bold")
+    ax4.grid(True, linestyle="--", alpha=0.5)
+    ax4.legend(loc="lower center", fontsize=9, framealpha=0.9)
 
     plt.suptitle(
         f"Extrinsic Calibration Sensitivity QA {title_suffix}",
