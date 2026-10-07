@@ -1,0 +1,15 @@
+# Hardware Metadata
+# os_name: Windows
+# os_release: 10
+# os_version: 10.0.26200
+# machine: AMD64
+# processor: Intel64 Family 6 Model 154 Stepping 3, GenuineIntel
+# python_version: 3.11.9
+# n_points: 108004
+# num_iterations: 50
+stage,p50_ms,p95_ms,mean_ms,std_ms,min_ms,max_ms,iterations
+velo_to_cam,2.978,3.505,3.006,0.315,2.477,4.040,50
+cam_to_image,5.324,6.621,5.564,0.749,4.428,8.808,50
+projection_total,8.361,9.870,8.569,0.944,7.112,12.001,50
+overlay_rendering,56.388,67.367,58.168,8.200,50.962,103.033,50
+end_to_end_total,64.699,77.501,66.738,8.835,58.858,115.034,50
