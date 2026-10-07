@@ -1,9 +1,9 @@
 # Báo cáo Day 6: Kiểm tra Calibration LiDAR-Camera bằng Projection và Phân tích Độ nhạy Extrinsic Drift
 
-- **Họ tên:** Ta Vinh
-- **MSSV:** 20240001
+- **Họ tên:** Tạ Hoàng Vinh
+- **MSSV:** 2A202602543
 - **Lớp:** AI20K - Track 4: Computer Vision and Robotics
-- **Link repo:** https://github.com/nguoibian863-ai/K4-Track4-Day06-3D-From-Point-Clouds
+- **Link repo:** https://github.com/nguoibian863-ai/TaHoangVinh-2A202602543-Track4-Day21
 - **Topic:** A — Kiểm tra calibration LiDAR-camera bằng projection (LiDAR-camera projection QA)
 - **Dataset:** data/kitti_mini, data/nuscenes_mini_subset, data/synthetic
 - **Các frame đã dùng:** 000001, 000011, 000021, 000032, 000049 (KITTI); scene-0103_000, scene-0103_010, scene-0103_020, scene-1094_000, scene-1094_010 (nuScenes); 000000, 000001, 000002, 000003, 000004 (synthetic)
