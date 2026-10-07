@@ -32,7 +32,15 @@ def velo_to_cam(points_xyz: np.ndarray, calib: KittiCalib) -> np.ndarray:
       3. Trả về 3 cột đầu.
     Tự kiểm: một điểm velodyne (10, 0, 0) phải có z_cam ~ 10 (phía trước camera).
     """
-    raise NotImplementedError("TODO(CP2): cài đặt velo_to_cam")
+    if len(points_xyz) == 0:
+        return np.zeros((0, 3), dtype=np.float32)
+    N = len(points_xyz)
+    pts_cam = np.full((N, 3), np.nan, dtype=np.float32)
+    finite = np.isfinite(points_xyz[:, :3]).all(axis=1)
+    if np.any(finite):
+        pts_homo = np.pad(points_xyz[finite, :3], ((0, 0), (0, 1)), mode="constant", constant_values=1.0)
+        pts_cam[finite] = (pts_homo @ calib.T_cam_velo.T)[:, :3]
+    return pts_cam
 
 
 def cam_to_image(points_cam: np.ndarray, P2: np.ndarray, image_shape: tuple[int, ...],
@@ -52,7 +60,38 @@ def cam_to_image(points_cam: np.ndarray, P2: np.ndarray, image_shape: tuple[int,
       3. Chia cho s để có (u, v). Chỉ chia với điểm có depth > min_depth.
       4. Lọc theo kích thước ảnh image_shape[:2] = (H, W).
     """
-    raise NotImplementedError("TODO(CP2): cài đặt cam_to_image")
+    N = len(points_cam)
+    if N == 0:
+        return np.zeros((0, 2), dtype=np.float32), np.zeros((0,), dtype=np.float32), np.zeros((0,), dtype=bool)
+
+    finite_mask = np.isfinite(points_cam).all(axis=1)
+    mask = np.zeros(N, dtype=bool)
+    z_cam = points_cam[:, 2]
+    valid_depth_mask = finite_mask & (z_cam > min_depth)
+
+    if not np.any(valid_depth_mask):
+        return np.zeros((0, 2), dtype=np.float32), np.zeros((0,), dtype=np.float32), mask
+
+    valid_indices = np.where(valid_depth_mask)[0]
+    valid_pts = points_cam[valid_indices]
+    pts_homo = np.pad(valid_pts, ((0, 0), (0, 1)), mode="constant", constant_values=1.0)
+    proj = pts_homo @ P2.T
+
+    s = proj[:, 2]
+    s_safe = np.where(s == 0, 1e-6, s)
+    u = proj[:, 0] / s_safe
+    v = proj[:, 1] / s_safe
+
+    H, W = image_shape[:2]
+    in_bounds = (u >= 0) & (u < W) & (v >= 0) & (v < H)
+
+    final_indices = valid_indices[in_bounds]
+    mask[final_indices] = True
+
+    uv = np.stack([u[in_bounds], v[in_bounds]], axis=1)
+    depth = z_cam[final_indices]
+
+    return uv, depth, mask
 
 
 def project_velo_to_image(points: np.ndarray, calib: KittiCalib, image_shape: tuple[int, ...]):
